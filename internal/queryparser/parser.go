@@ -243,11 +243,33 @@ func (p *Parser) Parse() *Query {
 	p.eat(TOKEN_SELECT)
 
 	projections := []Expression{}
-	projections = append(projections, p.parseExpression(0))
+	expectExpr := true
 
-	for p.curr.Type == TOKEN_COMMA {
-		p.eat(TOKEN_COMMA)
-		projections = append(projections, p.parseExpression(0))
+	for {
+		switch {
+		case p.curr.Type == TOKEN_FROM:
+			break
+
+		case p.curr.Type == TOKEN_COMMA:
+			if expectExpr {
+				panic("unexpected comma in SELECT list")
+			}
+			p.eat(TOKEN_COMMA)
+			expectExpr = true
+
+		default:
+			if !expectExpr {
+				panic("expected ',' or 'FROM' after SELECT expression, got: " + p.curr.Literal)
+			}
+			expr := p.parseExpression(0)
+			projections = append(projections, expr)
+			expectExpr = false
+		}
+
+		// Break the loop once FROM is reached after last projection
+		if p.curr.Type == TOKEN_FROM {
+			break
+		}
 	}
 
 	p.eat(TOKEN_FROM)

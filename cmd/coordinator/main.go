@@ -22,7 +22,9 @@ func main() {
 	fmt.Println("Record count:", record.NumRows())
 
 	// Test query
-	queryStr := "SELECT Date, Close FROM prices WHERE Close > 8000.2 AND Close < 9000.2"
+	// queryStr := "SELECT Date, Close FROM prices WHERE Close > 8000.2 AND Close < 9000.2"
+	queryStr := "SELECT Date FROM prices WHERE (Open + Close) / 2 > 5000.2 AND (Open + Close) / 2 < 6000.2"
+	// queryStr := "SELECT (Open + Close) / 2, Volume * 100 FROM prices WHERE Close > 1000.2"
 	parser := queryparser.NewParser(queryStr)
 	query := parser.Parse()
 

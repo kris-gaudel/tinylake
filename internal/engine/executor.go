@@ -11,14 +11,13 @@ import (
 	"github.com/kris-gaudel/tinylake/internal/queryparser"
 )
 
-// ExecuteQuery executes the parsed query on the given Arrow Record.
+// ExecuteQuery evaluates the parsed query against the given Arrow record.
 func ExecuteQuery(q *queryparser.Query, table array.Record) (array.Record, error) {
 	pool := memory.NewGoAllocator()
-
 	totalRows := int(table.NumRows())
 
+	// Step 1: Filter rows based on WHERE condition
 	passIndices := make([]int, 0, totalRows)
-
 	for row := 0; row < totalRows; row++ {
 		pass := true
 		if q.Where != nil {
@@ -28,7 +27,7 @@ func ExecuteQuery(q *queryparser.Query, table array.Record) (array.Record, error
 			}
 			boolResult, ok := result.(bool)
 			if !ok {
-				return nil, err
+				return nil, fmt.Errorf("WHERE clause did not evaluate to boolean at row %d", row)
 			}
 			pass = boolResult
 		}
@@ -37,62 +36,53 @@ func ExecuteQuery(q *queryparser.Query, table array.Record) (array.Record, error
 		}
 	}
 
+	// Step 2: Project columns or expressions
 	projectedArrays := []array.Interface{}
 	projectedFields := []arrow.Field{}
 
-	for _, expr := range q.Projections {
-		colRef, ok := expr.(*queryparser.ColumnRef)
-		if !ok {
-			return nil, fmt.Errorf("unsupported projection type: %T", expr)
-		}
-
-		colIdx := findColumnIndex(table, colRef.Name)
-		if colIdx == -1 {
-			return nil, fmt.Errorf("column %s not found in table", colRef.Name)
-		}
-		colArr := table.Column(colIdx)
-		colField := table.Schema().Field(colIdx)
-
-		builder := array.NewBuilder(pool, colField.Type)
-		defer builder.Release()
-
-		switch b := builder.(type) {
-		case *array.Float64Builder:
-			src := colArr.(*array.Float64)
-			for _, i := range passIndices {
-				if src.IsValid(i) {
-					b.Append(src.Value(i))
-				} else {
-					b.AppendNull()
-				}
+	for projIdx, expr := range q.Projections {
+		switch e := expr.(type) {
+		case *queryparser.ColumnRef:
+			// Simple column projection
+			colIdx := findColumnIndex(table, e.Name)
+			if colIdx == -1 {
+				return nil, fmt.Errorf("column %s not found", e.Name)
 			}
-			arr := b.NewArray()
-			projectedArrays = append(projectedArrays, arr)
-			defer arr.Release()
-
-			projectedFields = append(projectedFields, colField)
-
-		case *array.StringBuilder:
-			src := colArr.(*array.String)
-			for _, i := range passIndices {
-				if src.IsValid(i) {
-					b.Append(src.Value(i))
-				} else {
-					b.AppendNull()
-				}
-			}
-			projectedArrays = append(projectedArrays, b.NewArray())
-			projectedFields = append(projectedFields, colField)
+			projectedArrays = append(projectedArrays, table.Column(colIdx))
+			projectedFields = append(projectedFields, table.Schema().Field(colIdx))
 
 		default:
-			// Add more types here if needed
-			return nil, fmt.Errorf("unsupported column type: %T", b)
+			// Expression projection: compute per row
+			builder := array.NewFloat64Builder(pool)
+			defer builder.Release()
+
+			for _, row := range passIndices {
+				val, err := evaluateExpression(expr, table, row)
+				if err != nil {
+					return nil, fmt.Errorf("eval error in projection %d: %w", projIdx, err)
+				}
+				if val == nil {
+					builder.AppendNull()
+				} else {
+					builder.Append(toFloat(val))
+				}
+			}
+
+			arr := builder.NewArray()
+			defer arr.Release()
+			projectedArrays = append(projectedArrays, arr)
+
+			projectedFields = append(projectedFields, arrow.Field{
+				Name:     fmt.Sprintf("expr_%d", projIdx),
+				Type:     arrow.PrimitiveTypes.Float64,
+				Nullable: true,
+			})
 		}
 	}
 
-	outSchema := arrow.NewSchema(projectedFields, nil)
-	outRecord := array.NewRecord(outSchema, projectedArrays, int64(len(passIndices)))
-
+	// Step 3: Build and return output record
+	schema := arrow.NewSchema(projectedFields, nil)
+	outRecord := array.NewRecord(schema, projectedArrays, int64(len(passIndices)))
 	return outRecord, nil
 }
 
@@ -101,7 +91,7 @@ func evaluateExpression(expr queryparser.Expression, table array.Record, row int
 	case *queryparser.ColumnRef:
 		colIdx := findColumnIndex(table, e.Name)
 		if colIdx == -1 {
-			return nil, fmt.Errorf("column %s not found in table", e.Name)
+			return nil, fmt.Errorf("column %s not found", e.Name)
 		}
 		colArr := table.Column(colIdx)
 
@@ -121,11 +111,9 @@ func evaluateExpression(expr queryparser.Expression, table array.Record, row int
 		}
 
 	case *queryparser.Literal:
-		// Try to parse as float first
 		if v, err := strconv.ParseFloat(e.Value, 64); err == nil {
 			return v, nil
 		}
-		// Fallback as string
 		return e.Value, nil
 
 	case *queryparser.BinaryExpr:
@@ -133,21 +121,16 @@ func evaluateExpression(expr queryparser.Expression, table array.Record, row int
 		rightVal, _ := evaluateExpression(e.Right, table, row)
 
 		switch e.Op {
-		// Logical operators
 		case "AND":
 			return toBool(leftVal) && toBool(rightVal), nil
 		case "OR":
 			return toBool(leftVal) || toBool(rightVal), nil
-
-		// Comparison operators
 		case ">":
 			return toFloat(leftVal) > toFloat(rightVal), nil
 		case "<":
 			return toFloat(leftVal) < toFloat(rightVal), nil
 		case "=":
 			return leftVal == rightVal, nil
-
-		// Arithmetic operators
 		case "+":
 			return toFloat(leftVal) + toFloat(rightVal), nil
 		case "-":
@@ -156,7 +139,6 @@ func evaluateExpression(expr queryparser.Expression, table array.Record, row int
 			return toFloat(leftVal) * toFloat(rightVal), nil
 		case "/":
 			return toFloat(leftVal) / toFloat(rightVal), nil
-
 		default:
 			return nil, fmt.Errorf("unsupported operator: %s", e.Op)
 		}
@@ -166,18 +148,6 @@ func evaluateExpression(expr queryparser.Expression, table array.Record, row int
 	}
 }
 
-// findColumnIndex finds the index of a column by name in the record schema.
-func findColumnIndex(table array.Record, name string) int {
-	schema := table.Schema()
-	for i, field := range schema.Fields() {
-		if field.Name == name {
-			return i
-		}
-	}
-	return -1
-}
-
-// toFloat helper tries to convert an interface{} to float64
 func toFloat(v interface{}) float64 {
 	switch val := v.(type) {
 	case float64:
@@ -201,4 +171,14 @@ func toBool(v interface{}) bool {
 	default:
 		return false
 	}
+}
+
+func findColumnIndex(table array.Record, name string) int {
+	schema := table.Schema()
+	for i, field := range schema.Fields() {
+		if field.Name == name {
+			return i
+		}
+	}
+	return -1
 }
