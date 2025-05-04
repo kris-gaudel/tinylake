@@ -40,6 +40,15 @@ const (
 	TOKEN_OPERATOR
 	TOKEN_LITERAL
 	TOKEN_COMMA
+	TOKEN_AND
+	TOKEN_OR
+	TOKEN_NOT
+	TOKEN_PLUS
+	TOKEN_MINUS
+	TOKEN_ASTERISK
+	TOKEN_SLASH
+	TOKEN_LPAREN
+	TOKEN_RPAREN
 )
 
 type Token struct {
@@ -114,8 +123,15 @@ func (l *Lexer) NextToken() Token {
 			return Token{Type: TOKEN_FROM, Literal: word}
 		case "WHERE":
 			return Token{Type: TOKEN_WHERE, Literal: word}
+		case "AND":
+			return Token{Type: TOKEN_AND, Literal: word}
+		case "OR":
+			return Token{Type: TOKEN_OR, Literal: word}
+		case "NOT":
+			return Token{Type: TOKEN_NOT, Literal: word}
 		}
 		return Token{Type: TOKEN_IDENTIFIER, Literal: word}
+
 	}
 
 	if isDigit(ch) || ch == '.' {
@@ -146,9 +162,38 @@ func (l *Lexer) NextToken() Token {
 	}
 
 	// Operators
-	if ch == '>' || ch == '<' || ch == '=' {
+	// Single-char operators
+	switch ch {
+	case '>':
 		l.pos++
-		return Token{Type: TOKEN_OPERATOR, Literal: string(ch)}
+		return Token{Type: TOKEN_OPERATOR, Literal: ">"}
+	case '<':
+		l.pos++
+		return Token{Type: TOKEN_OPERATOR, Literal: "<"}
+	case '=':
+		l.pos++
+		return Token{Type: TOKEN_OPERATOR, Literal: "="}
+	case '+':
+		l.pos++
+		return Token{Type: TOKEN_PLUS, Literal: "+"}
+	case '-':
+		l.pos++
+		return Token{Type: TOKEN_MINUS, Literal: "-"}
+	case '*':
+		l.pos++
+		return Token{Type: TOKEN_ASTERISK, Literal: "*"}
+	case '/':
+		l.pos++
+		return Token{Type: TOKEN_SLASH, Literal: "/"}
+	case '(':
+		l.pos++
+		return Token{Type: TOKEN_LPAREN, Literal: "("}
+	case ')':
+		l.pos++
+		return Token{Type: TOKEN_RPAREN, Literal: ")"}
+	case ',':
+		l.pos++
+		return Token{Type: TOKEN_COMMA, Literal: ","}
 	}
 
 	// Comma
@@ -198,11 +243,11 @@ func (p *Parser) Parse() *Query {
 	p.eat(TOKEN_SELECT)
 
 	projections := []Expression{}
-	projections = append(projections, p.parseExpression())
+	projections = append(projections, p.parseExpression(0))
 
 	for p.curr.Type == TOKEN_COMMA {
 		p.eat(TOKEN_COMMA)
-		projections = append(projections, p.parseExpression())
+		projections = append(projections, p.parseExpression(0))
 	}
 
 	p.eat(TOKEN_FROM)
@@ -216,7 +261,7 @@ func (p *Parser) Parse() *Query {
 	var where Expression = nil
 	if p.curr.Type == TOKEN_WHERE {
 		p.eat(TOKEN_WHERE)
-		where = p.parseExpression()
+		where = p.parseExpression(0)
 	}
 
 	return &Query{
@@ -226,16 +271,17 @@ func (p *Parser) Parse() *Query {
 	}
 }
 
-func (p *Parser) parseExpression() Expression {
+func (p *Parser) parseExpression(precedence int) Expression {
 	left := p.parsePrimary()
 
-	if p.curr.Type == TOKEN_OPERATOR {
-		op := p.curr.Literal
-		p.eat(TOKEN_OPERATOR)
-		right := p.parsePrimary()
-		return &BinaryExpr{
+	for precedence < p.currentPrecedence() {
+		token := p.curr
+		p.eat(token.Type)
+
+		right := p.parseExpression(p.tokenPrecedence(token))
+		left = &BinaryExpr{
 			Left:  left,
-			Op:    op,
+			Op:    token.Literal,
 			Right: right,
 		}
 	}
@@ -253,7 +299,33 @@ func (p *Parser) parsePrimary() Expression {
 		val := p.curr.Literal
 		p.eat(TOKEN_LITERAL)
 		return &Literal{Value: val}
+	case TOKEN_LPAREN:
+		p.eat(TOKEN_LPAREN)
+		expr := p.parseExpression(0) // parse inner expression
+		p.eat(TOKEN_RPAREN)
+		return expr
 	default:
 		panic("unexpected token in primary: " + p.curr.Literal)
+	}
+}
+
+func (p *Parser) currentPrecedence() int {
+	return p.tokenPrecedence(p.curr)
+}
+
+func (p *Parser) tokenPrecedence(tok Token) int {
+	switch tok.Type {
+	case TOKEN_ASTERISK, TOKEN_SLASH:
+		return 3
+	case TOKEN_PLUS, TOKEN_MINUS:
+		return 2
+	case TOKEN_OPERATOR:
+		return 2 // same precedence as + and -
+	case TOKEN_AND:
+		return 1
+	case TOKEN_OR:
+		return 0
+	default:
+		return -1
 	}
 }

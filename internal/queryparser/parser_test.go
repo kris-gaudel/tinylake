@@ -1,6 +1,7 @@
 package queryparser
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -58,5 +59,46 @@ func TestParseFloatLiteral(t *testing.T) {
 	rightLit, ok := whereExpr.Right.(*Literal)
 	if !ok || rightLit.Value != "123.45" {
 		t.Errorf("expected literal '123.45', got %+v", whereExpr.Right)
+	}
+}
+
+func TestParseComplexWhere(t *testing.T) {
+	queryStr := "SELECT Date, Close FROM prices WHERE Close > 1000 AND Volume < 5000"
+	parser := NewParser(queryStr)
+	query := parser.Parse()
+
+	fmt.Println("Parsed Query:", query.String())
+
+	if query.TableName != "prices" {
+		t.Errorf("expected table name 'prices', got %s", query.TableName)
+	}
+
+	if len(query.Projections) != 2 {
+		t.Errorf("expected 2 projections, got %d", len(query.Projections))
+	}
+
+	// You can also print the WHERE clause expression tree nicely
+	fmt.Println("Parsed WHERE AST:")
+	printAST(query.Where, 0)
+}
+
+// Helper to print the AST tree nicely
+func printAST(expr Expression, indent int) {
+	prefix := ""
+	for i := 0; i < indent; i++ {
+		prefix += "  "
+	}
+
+	switch e := expr.(type) {
+	case *ColumnRef:
+		fmt.Println(prefix+"Column:", e.Name)
+	case *Literal:
+		fmt.Println(prefix+"Literal:", e.Value)
+	case *BinaryExpr:
+		fmt.Println(prefix+"BinaryExpr:", e.Op)
+		printAST(e.Left, indent+1)
+		printAST(e.Right, indent+1)
+	default:
+		fmt.Println(prefix + "Unknown expression type")
 	}
 }

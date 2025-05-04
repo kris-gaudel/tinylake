@@ -133,12 +133,30 @@ func evaluateExpression(expr queryparser.Expression, table array.Record, row int
 		rightVal, _ := evaluateExpression(e.Right, table, row)
 
 		switch e.Op {
+		// Logical operators
+		case "AND":
+			return toBool(leftVal) && toBool(rightVal), nil
+		case "OR":
+			return toBool(leftVal) || toBool(rightVal), nil
+
+		// Comparison operators
 		case ">":
 			return toFloat(leftVal) > toFloat(rightVal), nil
 		case "<":
 			return toFloat(leftVal) < toFloat(rightVal), nil
 		case "=":
 			return leftVal == rightVal, nil
+
+		// Arithmetic operators
+		case "+":
+			return toFloat(leftVal) + toFloat(rightVal), nil
+		case "-":
+			return toFloat(leftVal) - toFloat(rightVal), nil
+		case "*":
+			return toFloat(leftVal) * toFloat(rightVal), nil
+		case "/":
+			return toFloat(leftVal) / toFloat(rightVal), nil
+
 		default:
 			return nil, fmt.Errorf("unsupported operator: %s", e.Op)
 		}
@@ -169,5 +187,18 @@ func toFloat(v interface{}) float64 {
 		return f
 	default:
 		return 0
+	}
+}
+
+func toBool(v interface{}) bool {
+	switch val := v.(type) {
+	case bool:
+		return val
+	case float64:
+		return val != 0
+	case string:
+		return val != ""
+	default:
+		return false
 	}
 }
