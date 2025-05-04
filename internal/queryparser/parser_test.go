@@ -102,3 +102,20 @@ func printAST(expr Expression, indent int) {
 		fmt.Println(prefix + "Unknown expression type")
 	}
 }
+
+func TestParseFuncCall(t *testing.T) {
+	queryStr := "SELECT SUM(Volume), COUNT(*) FROM prices"
+	parser := NewParser(queryStr)
+	query := parser.Parse()
+
+	if len(query.Projections) != 2 {
+		t.Errorf("expected 2 projections, got %d", len(query.Projections))
+	}
+
+	if fc, ok := query.Projections[0].(*FuncCall); !ok || fc.Name != "SUM" {
+		t.Errorf("expected SUM function call, got %+v", query.Projections[0])
+	}
+	if fc, ok := query.Projections[1].(*FuncCall); !ok || fc.Name != "COUNT" {
+		t.Errorf("expected COUNT function call, got %+v", query.Projections[1])
+	}
+}

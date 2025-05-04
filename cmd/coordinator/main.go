@@ -23,8 +23,14 @@ func main() {
 
 	// Test query
 	// queryStr := "SELECT Date, Close FROM prices WHERE Close > 8000.2 AND Close < 9000.2"
-	queryStr := "SELECT Date FROM prices WHERE (Open + Close) / 2 > 5000.2 AND (Open + Close) / 2 < 6000.2"
+	// queryStr := "SELECT Date FROM prices WHERE (Open + Close) / 2 > 5000.2 AND (Open + Close) / 2 < 6000.2"
 	// queryStr := "SELECT (Open + Close) / 2, Volume * 100 FROM prices WHERE Close > 1000.2"
+	// queryStr := "SELECT COUNT(*) FROM prices"
+	// queryStr := "SELECT SUM(Close) FROM prices"
+	// queryStr := "SELECT AVG(Volume) FROM prices"
+	// queryStr := "SELECT MAX(Close) FROM prices"
+	// queryStr := "SELECT MIN(Open) FROM prices"
+	queryStr := "SELECT COUNT(*) FROM prices WHERE Close > 1000"
 	parser := queryparser.NewParser(queryStr)
 	query := parser.Parse()
 

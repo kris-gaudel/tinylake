@@ -29,6 +29,13 @@ type BinaryExpr struct {
 	Right Expression
 }
 
+type FuncCall struct {
+	Name string
+	Args []Expression
+}
+
+type StarExpr struct{}
+
 type TokenType int
 
 const (
@@ -91,6 +98,14 @@ func formatExpr(expr Expression) string {
 		return fmt.Sprintf("%v", e.Value)
 	case *BinaryExpr:
 		return fmt.Sprintf("(%s %s %s)", formatExpr(e.Left), e.Op, formatExpr(e.Right))
+	case *FuncCall:
+		argStrs := make([]string, len(e.Args))
+		for i, a := range e.Args {
+			argStrs[i] = formatExpr(a)
+		}
+		return fmt.Sprintf("%s(%s)", e.Name, strings.Join(argStrs, ", "))
+	case *StarExpr:
+		return "*"
 	default:
 		return "UNKNOWN_EXPR"
 	}
@@ -316,6 +331,24 @@ func (p *Parser) parsePrimary() Expression {
 	case TOKEN_IDENTIFIER:
 		ident := p.curr.Literal
 		p.eat(TOKEN_IDENTIFIER)
+
+		if p.curr.Type == TOKEN_LPAREN {
+			// It's a function call
+			p.eat(TOKEN_LPAREN)
+			args := []Expression{}
+
+			if p.curr.Type != TOKEN_RPAREN {
+				args = append(args, p.parseExpression(0))
+				for p.curr.Type == TOKEN_COMMA {
+					p.eat(TOKEN_COMMA)
+					args = append(args, p.parseExpression(0))
+				}
+			}
+
+			p.eat(TOKEN_RPAREN)
+			return &FuncCall{Name: strings.ToUpper(ident), Args: args}
+		}
+
 		return &ColumnRef{Name: ident}
 	case TOKEN_LITERAL:
 		val := p.curr.Literal
@@ -326,6 +359,9 @@ func (p *Parser) parsePrimary() Expression {
 		expr := p.parseExpression(0) // parse inner expression
 		p.eat(TOKEN_RPAREN)
 		return expr
+	case TOKEN_ASTERISK:
+		p.eat(TOKEN_ASTERISK)
+		return &StarExpr{}
 	default:
 		panic("unexpected token in primary: " + p.curr.Literal)
 	}
