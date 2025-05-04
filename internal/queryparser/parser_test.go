@@ -119,3 +119,15 @@ func TestParseFuncCall(t *testing.T) {
 		t.Errorf("expected COUNT function call, got %+v", query.Projections[1])
 	}
 }
+
+func TestParseGroupBy(t *testing.T) {
+	query := NewParser("SELECT Region, COUNT(*) FROM prices GROUP BY Region").Parse()
+
+	if len(query.GroupBy) != 1 {
+		t.Errorf("expected 1 GROUP BY expression, got %d", len(query.GroupBy))
+	}
+
+	if col, ok := query.GroupBy[0].(*ColumnRef); !ok || col.Name != "Region" {
+		t.Errorf("expected GROUP BY Region, got %+v", query.GroupBy[0])
+	}
+}

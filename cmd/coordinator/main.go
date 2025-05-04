@@ -30,7 +30,9 @@ func main() {
 	// queryStr := "SELECT AVG(Volume) FROM prices"
 	// queryStr := "SELECT MAX(Close) FROM prices"
 	// queryStr := "SELECT MIN(Open) FROM prices"
-	queryStr := "SELECT COUNT(*) FROM prices WHERE Close > 1000"
+	// queryStr := "SELECT COUNT(*) FROM prices WHERE Close > 1000"
+	// queryStr := "SELECT Date, COUNT(*) FROM prices GROUP BY Date"
+	queryStr := "SELECT Date, AVG((High + Low) / 2) FROM prices GROUP BY Date"
 	parser := queryparser.NewParser(queryStr)
 	query := parser.Parse()
 

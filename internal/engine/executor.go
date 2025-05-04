@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -11,6 +12,18 @@ import (
 
 	"github.com/kris-gaudel/tinylake/internal/queryparser"
 )
+
+type groupKey struct {
+	parts []interface{}
+}
+
+func (k groupKey) String() string {
+	s := make([]string, len(k.parts))
+	for i, p := range k.parts {
+		s[i] = fmt.Sprintf("%v", p)
+	}
+	return strings.Join(s, "|")
+}
 
 func ExecuteQuery(q *queryparser.Query, table array.Record) (array.Record, error) {
 	pool := memory.NewGoAllocator()
@@ -47,6 +60,10 @@ func ExecuteQuery(q *queryparser.Query, table array.Record) (array.Record, error
 
 	if allAgg {
 		return executeAggregates(q.Projections, table, passIndices, pool)
+	}
+
+	if len(q.GroupBy) > 0 {
+		return executeGroupedQuery(q, table, passIndices, pool)
 	}
 
 	// Step 3: Regular projection
@@ -122,6 +139,109 @@ func executeAggregates(exprs []queryparser.Expression, table array.Record, indic
 
 	schema := arrow.NewSchema(fields, nil)
 	return array.NewRecord(schema, arrays, 1), nil
+}
+
+func executeGroupedQuery(q *queryparser.Query, table array.Record, indices []int, pool memory.Allocator) (array.Record, error) {
+	groupMap := map[string][]int{} // key: groupKey.String(), value: row indices
+
+	// Group rows
+	for _, row := range indices {
+		keyParts := []interface{}{}
+		for _, expr := range q.GroupBy {
+			val, err := evaluateExpression(expr, table, row)
+			if err != nil {
+				return nil, err
+			}
+			keyParts = append(keyParts, val)
+		}
+		gkey := groupKey{parts: keyParts}.String()
+		groupMap[gkey] = append(groupMap[gkey], row)
+	}
+
+	// For each group, compute output row
+	groupKeys := make([]string, 0, len(groupMap))
+	for k := range groupMap {
+		groupKeys = append(groupKeys, k)
+	}
+	sort.Strings(groupKeys) // optional: deterministic output
+
+	resultCols := make([]array.Interface, len(q.Projections))
+	fieldTypes := make([]arrow.Field, len(q.Projections))
+
+	// Builders for each projected column
+	builders := make([]array.Builder, len(q.Projections))
+	defer func() {
+		for _, b := range builders {
+			if b != nil {
+				b.Release()
+			}
+		}
+	}()
+
+	for i, expr := range q.Projections {
+		switch e := expr.(type) {
+		case *queryparser.ColumnRef:
+			colIdx := findColumnIndex(table, e.Name)
+			if colIdx == -1 {
+				return nil, fmt.Errorf("column %s not found", e.Name)
+			}
+			colType := table.Column(colIdx).DataType()
+			switch colType.ID() {
+			case arrow.STRING:
+				builders[i] = array.NewStringBuilder(pool)
+			case arrow.FLOAT64:
+				builders[i] = array.NewFloat64Builder(pool)
+			default:
+				return nil, fmt.Errorf("unsupported data type in GROUP BY: %v", colType)
+			}
+		case *queryparser.FuncCall:
+			builders[i] = array.NewFloat64Builder(pool)
+		default:
+			return nil, fmt.Errorf("unsupported expression type in GROUP BY projections: %T", expr)
+		}
+	}
+
+	for _, gkey := range groupKeys {
+		rows := groupMap[gkey]
+
+		for i, expr := range q.Projections {
+			switch e := expr.(type) {
+			case *queryparser.ColumnRef:
+				// use first row's value as representative for group key
+				val, _ := evaluateExpression(e, table, rows[0])
+				colIdx := findColumnIndex(table, e.Name)
+				colType := table.Column(colIdx).DataType()
+				fieldTypes[i] = arrow.Field{Name: e.Name, Type: colType}
+				switch b := builders[i].(type) {
+				case *array.StringBuilder:
+					b.Append(val.(string))
+				case *array.Float64Builder:
+					b.Append(toFloat(val))
+				default:
+					return nil, fmt.Errorf("unsupported builder type")
+				}
+
+			case *queryparser.FuncCall:
+				val, err := evalAggregateFunction(e, table, rows)
+				if err != nil {
+					return nil, err
+				}
+				fieldTypes[i] = arrow.Field{Name: strings.ToUpper(e.Name), Type: arrow.PrimitiveTypes.Float64}
+				builders[i].(*array.Float64Builder).Append(val)
+			default:
+				return nil, fmt.Errorf("unsupported projection type in GROUP BY: %T", expr)
+			}
+		}
+	}
+
+	for i := range builders {
+		arr := builders[i].NewArray()
+		defer arr.Release()
+		resultCols[i] = arr
+	}
+
+	schema := arrow.NewSchema(fieldTypes, nil)
+	return array.NewRecord(schema, resultCols, int64(len(groupKeys))), nil
 }
 
 func evalAggregateFunction(f *queryparser.FuncCall, table array.Record, indices []int) (float64, error) {

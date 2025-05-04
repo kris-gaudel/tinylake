@@ -10,6 +10,7 @@ type Query struct {
 	Projections []Expression // list of projections (columns or simple expressions)
 	TableName   string       // FROM table
 	Where       Expression   // filter expression (WHERE condition), can be nil
+	GroupBy     []Expression
 }
 
 // Expression represents a parsed expression
@@ -56,6 +57,8 @@ const (
 	TOKEN_SLASH
 	TOKEN_LPAREN
 	TOKEN_RPAREN
+	TOKEN_GROUP
+	TOKEN_BY
 )
 
 type Token struct {
@@ -144,9 +147,12 @@ func (l *Lexer) NextToken() Token {
 			return Token{Type: TOKEN_OR, Literal: word}
 		case "NOT":
 			return Token{Type: TOKEN_NOT, Literal: word}
+		case "GROUP":
+			return Token{Type: TOKEN_GROUP, Literal: word}
+		case "BY":
+			return Token{Type: TOKEN_BY, Literal: word}
 		}
 		return Token{Type: TOKEN_IDENTIFIER, Literal: word}
-
 	}
 
 	if isDigit(ch) || ch == '.' {
@@ -301,11 +307,28 @@ func (p *Parser) Parse() *Query {
 		where = p.parseExpression(0)
 	}
 
+	var groupBy []Expression
+	if p.curr.Type == TOKEN_GROUP {
+		p.eat(TOKEN_GROUP)
+		if p.curr.Type != TOKEN_BY {
+			panic("expected BY after GROUP")
+		}
+		p.eat(TOKEN_BY)
+
+		groupBy = append(groupBy, p.parseExpression(0))
+		for p.curr.Type == TOKEN_COMMA {
+			p.eat(TOKEN_COMMA)
+			groupBy = append(groupBy, p.parseExpression(0))
+		}
+	}
+
 	return &Query{
 		Projections: projections,
 		TableName:   tableName,
 		Where:       where,
+		GroupBy:     groupBy,
 	}
+
 }
 
 func (p *Parser) parseExpression(precedence int) Expression {
